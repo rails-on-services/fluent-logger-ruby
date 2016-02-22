@@ -21,6 +21,8 @@ require 'socket'
 require 'monitor'
 require 'logger'
 require 'json'
+require 'base64'
+require 'securerandom'
 
 module Fluent
   module Logger
@@ -136,9 +138,9 @@ module Fluent
         @logger.debug { "event: #{tag} #{map.to_json}" rescue nil } if @logger.debug?
         tag = "#{@tag_prefix}.#{tag}" if @tag_prefix
         if @nanosecond_precision && time.is_a?(Time)
-          write [tag, EventTime.new(time.to_i, time.nsec), map]
+          write(tag, EventTime.new(time.to_i, time.nsec), map)
         else
-          write [tag, time.to_i, map]
+          write(tag, time.to_i, map)
         end
       end
 
@@ -146,7 +148,9 @@ module Fluent
         @mon.synchronize {
           if @pending
             begin
-              send_data(@pending)
+              @pending.each do |tag, record|
+                send_data([tag, record].to_msgpack)
+              end
             rescue => e
               set_last_error(e)
               @logger.error("FluentLogger: Can't send logs to #{connection_string}: #{$!}")
@@ -206,20 +210,22 @@ module Fluent
         end
       end
 
-      def write(msg)
+      def write(tag, time, map)
         begin
-          data = to_msgpack(msg)
+          record = to_msgpack([time, map])
         rescue => e
           set_last_error(e)
+          msg = [tag, time, map]
           @logger.error("FluentLogger: Can't convert to msgpack: #{msg.inspect}: #{$!}")
           return false
         end
 
         @mon.synchronize {
           if @pending
-            @pending << data
+            @pending[tag] << record
           else
-            @pending = data
+            @pending = Hash.new{|h, k| h[k] = "" }
+            @pending[tag] = record
           end
 
           # suppress reconnection burst
@@ -230,11 +236,9 @@ module Fluent
           end
 
           begin
-            written = send_data(@pending)
-            if @pending.bytesize != written
-              raise "Actual written data size(#{written} bytes) is different from the received data size(#{@pending.bytesize} bytes)."
+            @pending.each do |tag, record|
+              send_data([tag, record].to_msgpack)
             end
-
             @pending = nil
             true
           rescue => e
