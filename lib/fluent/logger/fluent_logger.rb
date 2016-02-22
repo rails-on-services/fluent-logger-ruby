@@ -152,7 +152,11 @@ module Fluent
           if @pending
             begin
               @pending.each do |tag, record|
+<<<<<<< HEAD
                 send_data(tag, record)
+=======
+                send_data([tag, record].to_msgpack)
+>>>>>>> 4f98038... Use PackedForward instead of Message
               end
             rescue => e
               set_last_error(e)
@@ -240,7 +244,11 @@ module Fluent
 
           begin
             @pending.each do |tag, record|
+<<<<<<< HEAD
               send_data(tag, record)
+=======
+              send_data([tag, record].to_msgpack)
+>>>>>>> 4f98038... Use PackedForward instead of Message
             end
             @pending = nil
             true
@@ -293,6 +301,7 @@ module Fluent
         #  end
         #  data = data[n..-1]
         #end
+<<<<<<< HEAD
       end
 
       def send_data_nonblock(data)
@@ -313,6 +322,8 @@ module Fluent
             end
           end
         end
+=======
+>>>>>>> 4f98038... Use PackedForward instead of Message
 
         true
       end
