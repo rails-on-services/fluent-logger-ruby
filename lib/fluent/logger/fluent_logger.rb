@@ -93,6 +93,9 @@ module Fluent
         end
         @packer = @factory.packer
 
+        @require_ack_response = options[:require_ack_response]
+        @ack_response_timeout = options[:ack_response_timeout] || 190
+
         @mon = Monitor.new
         @pending = nil
         @connect_error_history = []
@@ -149,7 +152,7 @@ module Fluent
           if @pending
             begin
               @pending.each do |tag, record|
-                send_data([tag, record].to_msgpack)
+                send_data(tag, record)
               end
             rescue => e
               set_last_error(e)
@@ -237,7 +240,7 @@ module Fluent
 
           begin
             @pending.each do |tag, record|
-              send_data([tag, record].to_msgpack)
+              send_data(tag, record)
             end
             @pending = nil
             true
@@ -258,7 +261,7 @@ module Fluent
         }
       end
 
-      def send_data(data)
+      def send_data(tag, record)
         unless connect?
           connect!
         end
@@ -270,6 +273,12 @@ module Fluent
             # block timeout error during IO#write
             ws.first.write(data)
           end
+        if @require_ack_response
+          option = {}
+          option['chunk'] = generate_chunk
+          @con.write [tag, record, option].to_msgpack
+        else
+          @con.write [tag, record].to_msgpack
         end
         #while true
         #  puts "sending #{data.length} bytes"
@@ -290,13 +299,22 @@ module Fluent
         written = @con.write_nonblock(data)
         remaining = data.bytesize - written
 
-        while remaining > 0
-          len = @con.write_nonblock(data.byteslice(written, remaining))
-          remaining -= len
-          written += len
+        if @require_ack_response && @ack_response_timeout > 0
+          if IO.select([@con], nil, nil, @ack_response_timeout)
+            raw_data = @con.recv(1024)
+
+            if raw_data.empty?
+              raise "Closed connection"
+            else
+              response = MessagePack.unpack(raw_data)
+              if response['ack'] != option['chunk']
+                raise "ack in response and chunk id in sent data are different"
+              end
+            end
+          end
         end
 
-        written
+        true
       end
 
       def connect!
@@ -341,6 +359,10 @@ module Fluent
         else
           true
         end
+      end
+
+      def generate_chunk
+        Base64.encode64(([SecureRandom.random_number(1 << 32)] * 4).pack('NNNN')).chomp
       end
     end
   end
